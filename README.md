@@ -4,7 +4,7 @@ This repository contains Python scripts to facilitate projects using data from t
 
 ## Contents
 
-1. `download_csye_for_mfa.py`: Creates a local copy of the latest version of the CSYE in the format required by the Montreal Forced Aligner (MFA). This script also generates a basic pronunciation dictionary and configuation file for use with MFA commands.
+1. `download_csye_for_mfa.py`: Creates a local copy of the latest version of the CSYE (both the transcripts and audio files) in the format required by the Montreal Forced Aligner. This script also generates a basic pronunciation dictionary and configuation file for use with MFA commands.
 
 ## Usage
 
