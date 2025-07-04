@@ -24,14 +24,15 @@ Last Modified: 2025-04-14
 License: CC BY-NC-SA 4.0
 
 Usage:
-    python download_csye_for_mfa.py [output_directory] [--transcript-set TRANSCRIPT_SET]
+    python download_csye_for_mfa.py [output_directory] [--transcript-set TRANSCRIPT_SET] [--local-m4a-zip LOCAL_ZIP_PATH]
 
     If no output directory is specified, it defaults to 'mfa_workspace'.
     TRANSCRIPT_SET can be 'all', 'reviewed' (only), or 'unreviewed' (only). Default is 'reviewed'.
+    LOCAL_ZIP_PATH can be used to specify a local m4a zip file instead of downloading.
 
 Notes:
     - Ensure that ffmpeg is installed and accessible from the command line.
-    - Internet connection is required to download the necessary files.
+    - Internet connection is required to download the necessary files (unless using local m4a zip).
     - The final MFA-compatible corpus will be available in the
       '[output_directory]/csye' directory.
 """
@@ -63,6 +64,8 @@ def parse_arguments():
                         help="Directory to store all files (default: mfa_workspace)")
     parser.add_argument('--transcript-set', choices=['all', 'reviewed', 'unreviewed'], default='reviewed',
                         help="Choose which transcripts to use: 'all', 'reviewed', or 'unreviewed' (default: reviewed)")
+    parser.add_argument('--local-m4a-zip', type=str, default=None,
+                        help="Path to local m4a zip file (skips downloading bulk archive)")
     return parser.parse_args()
 
 # Functions for TextGrid downloading and organizing
@@ -164,6 +167,57 @@ def download_audio_file(audio_link, file_name):
         except Exception as e:
             print(f"Error downloading {file_name}: {e}")
             return False
+
+def extract_local_m4a_zip(zip_path, extract_to):
+    """
+    Extract m4a files from a local zip file.
+    
+    Args:
+        zip_path: Path to the local zip file
+        extract_to: Directory to extract files to
+        
+    Returns:
+        set: Set of extracted m4a filenames (without extension)
+    """
+    print(f"Extracting m4a files from local zip: {zip_path}")
+    
+    if not os.path.exists(zip_path):
+        print(f"Error: Local zip file not found at {zip_path}")
+        return set()
+    
+    available_files = set()
+    
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            # Extract only the m4a files
+            for member in zip_ref.namelist():
+                if member.endswith('.m4a'):
+                    # Get just the filename
+                    filename = os.path.basename(member)
+                    # Add to available files set (without extension)
+                    available_files.add(os.path.splitext(filename)[0])
+                    
+                    # Extract the file
+                    source = zip_ref.open(member)
+                    target_path = os.path.join(extract_to, filename)
+                    
+                    # Skip if the file already exists
+                    if os.path.exists(target_path):
+                        print(f"  {filename} already exists; skipping extraction.")
+                        source.close()
+                        continue
+                    
+                    with open(target_path, 'wb') as target:
+                        target.write(source.read())
+                    source.close()
+                    print(f"  Extracted: {filename}")
+        
+        print(f"Extracted {len(available_files)} m4a files from local zip")
+        
+    except Exception as e:
+        print(f"Error extracting local ZIP file: {e}")
+    
+    return available_files
 
 def download_bulk_m4a_zip(url, extract_to):
     """
@@ -267,21 +321,26 @@ def convert_to_wav(m4a_file, wav_file):
             '-loglevel', 'quiet'
         ], check=True)
 
-def process_audio_files(csv_content, m4a_dir, corpus_dir, selected_tapes=None):
+def process_audio_files(csv_content, m4a_dir, corpus_dir, selected_tapes=None, local_m4a_zip=None):
     """
-    Process audio files: first use bulk archive, then download missing files.
+    Process audio files: first use bulk archive (local or remote), then download missing files.
     
     Args:
         csv_content: CSV content with audio links
         m4a_dir: Directory to store m4a files
         corpus_dir: Directory to store wav files
         selected_tapes: Set of tape IDs to process. If None, process all tapes.
+        local_m4a_zip: Path to local m4a zip file, or None to download from URL
     """
     os.makedirs(m4a_dir, exist_ok=True)
     
-    # First, try to download and extract the bulk m4a archive
-    print("Step 1: Downloading and extracting bulk m4a archive...")
-    available_from_archive = download_bulk_m4a_zip(BULK_M4A_ZIP_URL, m4a_dir)
+    # First, try to get m4a files from either local zip or bulk download
+    if local_m4a_zip:
+        print("Step 1: Extracting m4a files from local zip...")
+        available_from_archive = extract_local_m4a_zip(local_m4a_zip, m4a_dir)
+    else:
+        print("Step 1: Downloading and extracting bulk m4a archive...")
+        available_from_archive = download_bulk_m4a_zip(BULK_M4A_ZIP_URL, m4a_dir)
     
     # Now process the CSV to identify and download any missing files
     print("Step 2: Checking for missing audio files...")
@@ -329,7 +388,8 @@ def process_audio_files(csv_content, m4a_dir, corpus_dir, selected_tapes=None):
     print("\nAudio processing summary:")
     if selected_tapes is not None:
         print(f"- Selected {selected_count} of {total_tapes} audio files based on transcripts")
-    print(f"- Used {len(available_from_archive)} files from the bulk archive")
+    source_type = "local zip" if local_m4a_zip else "bulk archive"
+    print(f"- Used {len(available_from_archive)} files from the {source_type}")
     print(f"- Downloaded {missing_downloads} of {missing_count} missing files individually")
 
 # Functions for fixing brackets in transcripts
@@ -440,7 +500,7 @@ def create_pronunciation_dictionary(corpus_dir, output_dict_file):
 
 # Main function
 
-def main(output_directory, transcript_set):
+def main(output_directory, transcript_set, local_m4a_zip=None):
     corpus_dir = os.path.join(output_directory, 'csye')
     m4a_dir = os.path.join(output_directory, 'm4a')
     transcripts_dir = os.path.join(output_directory, 'CSYE-Transcripts')
@@ -462,14 +522,14 @@ def main(output_directory, transcript_set):
     download_and_extract_zip(TRANSCRIPTS_ZIP_URL, transcripts_dir)
     selected_tapes = copy_and_rename_textgrid_files(transcripts_dir, corpus_dir, transcript_set)
     
-    # Step 2: Audio processing - now with bulk download first
+    # Step 2: Audio processing
     print(f"Starting audio processing for {len(selected_tapes)} selected tapes...")
     csv_content = download_csv(AUDIO_FILES_URL)
-    process_audio_files(csv_content, m4a_dir, corpus_dir, selected_tapes)
+    process_audio_files(csv_content, m4a_dir, corpus_dir, selected_tapes, local_m4a_zip)
 
     # Step 3: Fix brackets in transcripts
     print("Fixing brackets in transcripts...")
-    for filename in os.listdir(corpus_dir):
+    for filename in sorted(os.listdir(corpus_dir)):
         if filename.endswith('.TextGrid'):
             file_path = os.path.join(corpus_dir, filename)
             process_textgrid_file(file_path)
@@ -487,4 +547,4 @@ def main(output_directory, transcript_set):
 
 if __name__ == '__main__':
     args = parse_arguments()
-    main(args.output_directory, args.transcript_set)
+    main(args.output_directory, args.transcript_set, args.local_m4a_zip)
